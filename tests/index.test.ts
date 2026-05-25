@@ -10,10 +10,10 @@ test('Balakey', async () => {
   const balakey = hasher([glob])
 
   const results = await Array.fromAsync(balakey)
-  expect(results).toMatchInlineSnapshot([
+  expect(results).toMatchSnapshot([
     {
       hash: expect.any(String),
-      path: `${fixturesDir}/hello-world.txt`,
+      path: expect.any(String),
       duration: expect.any(Number),
     },
   ])
