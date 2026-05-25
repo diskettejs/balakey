@@ -68,9 +68,6 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
             build: pnpm build --target aarch64-apple-darwin
-          - host: ubuntu-latest
-            target: wasm32-wasip1-threads
-            build: pnpm build --target wasm32-wasip1-threads
     name: stable - ${{ matrix.settings.target }} - node@26
     runs-on: ${{ matrix.settings.host }}
     steps:
@@ -122,9 +119,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: |
-            ${{ env.APP_NAME }}.*.node
-            ${{ env.APP_NAME }}.*.wasm
+          path: ${{ env.APP_NAME }}.*.node
           if-no-files-found: error
   test-macOS-windows-binding:
     name: Test bindings on ${{ matrix.settings.target }} - node@${{ matrix.node }}
@@ -235,36 +230,6 @@ jobs:
           name: test-binding
           options: -v ${{ steps.docker.outputs.PNPM_STORE_PATH }}:${{ steps.docker.outputs.PNPM_STORE_PATH }} -v ${{ github.workspace }}:${{ github.workspace }} -w ${{ github.workspace }} --platform ${{ steps.docker.outputs.PLATFORM }}
           args: npm run test
-  test-wasi:
-    name: Test WASI target
-    needs:
-      - build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: setup pnpm
-        uses: pnpm/action-setup@v6
-      - name: Setup node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 26
-          cache: pnpm
-      - name: Install dependencies
-        run: |
-          echo 'supportedArchitectures.cpu=["wasm32"]' >> .npmrc
-          pnpm install
-      - name: Download artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: bindings-wasm32-wasip1-threads
-          path: .
-      - name: List packages
-        run: ls -R .
-        shell: bash
-      - name: Test bindings
-        run: pnpm test
-        env:
-          NAPI_RS_FORCE_WASI: 1
   publish:
     name: Publish
     runs-on: ubuntu-latest
@@ -272,7 +237,6 @@ jobs:
       - lint
       - test-macOS-windows-binding
       - test-linux-binding
-      - test-wasi
     steps:
       - uses: actions/checkout@v6
       - name: setup pnpm
