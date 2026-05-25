@@ -1,0 +1,52 @@
+{
+  "name": "@diskette/balakey",
+  "version": "0.2.0",
+  "description": "Template project for writing node package with napi-rs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diskettejs/balakey.git"
+  },
+  "files": [
+    "index.d.ts",
+    "index.js"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --esm --platform --release",
+    "build:debug": "napi build --esm --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "version": "napi version",
+    "test": "vitest",
+    "fmt:js": "oxfmt",
+    "fmt:rs": "cargo fmt"
+  },
+  "devDependencies": {
+    "@emnapi/core": "^1.10.0",
+    "@emnapi/runtime": "^1.10.0",
+    "@napi-rs/cli": "^3.6.2",
+    "@napi-rs/wasm-runtime": "^1.1.4",
+    "@tybys/wasm-util": "^0.10.2",
+    "@types/node":"^25.9.1",
+    "oxfmt": "^0.51.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  },
+  "napi": {
+    "binaryName": "balakey",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-apple-darwin"
+    ]
+  },
+  "packageManager": "pnpm@11.1.2"
+}
