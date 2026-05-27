@@ -26,7 +26,7 @@ impl Task for HashFilesTask {
         // Files could realistically disappear between
         // glob expansion and hashing given that we process them all at once.
         hasher
-          .update_mmap(path)
+          .update_mmap_rayon(path)
           .map_err(|e| Error::from_reason(format!("Failed to hash {path}: {e}",)))?;
 
         let hash = hasher.finalize();
