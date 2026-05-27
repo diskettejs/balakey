@@ -7,9 +7,9 @@ const fixturesDir = fileURLToPath(import.meta.resolve('./fixtures'))
 // TODO: improve tests
 test('Balakey', async () => {
   const glob = `${fixturesDir}/**/*`
-  const balakey = hasher([glob])
+  const walker = hasher([glob])
 
-  const results = await Array.fromAsync(balakey)
+  const results = await Array.fromAsync(walker)
   expect(results).toMatchSnapshot([
     {
       hash: expect.any(String),

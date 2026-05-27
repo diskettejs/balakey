@@ -6,12 +6,14 @@
  *
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols#the_async_iterator_and_async_iterable_protocols
  */
-export declare class Balakey {
+export declare class Walker {
   [Symbol.asyncIterator](): AsyncGenerator<HashResult, void, undefined>
   constructor(paths: Array<string>)
 }
 
-export declare function hasher(patterns: Array<string>): Balakey
+export declare function hasher(patterns: Array<string>): Walker
+
+export declare function hashFiles(patterns: Array<string>, signal?: AbortSignal | undefined | null): Promise<Array<HashResult>>
 
 export interface HashResult {
   path: string
