@@ -1,7 +1,6 @@
 {
   "name": "@diskette/balakey",
   "version": "0.5.0",
-  "description": "Template project for writing node package with napi-rs",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -31,11 +30,11 @@
   "devDependencies": {
     "@emnapi/core": "^1.10.0",
     "@emnapi/runtime": "^1.10.0",
-    "@napi-rs/cli": "^3.6.2",
-    "@types/node": "^25.9.1",
-    "oxfmt": "^0.51.0",
+    "@napi-rs/cli": "^3.7.0",
+    "@types/node": "^25.9.2",
+    "oxfmt": "^0.53.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.8"
   },
   "napi": {
     "binaryName": "balakey",
@@ -46,5 +45,5 @@
       "aarch64-apple-darwin"
     ]
   },
-  "packageManager": "pnpm@11.1.2"
+  "packageManager": "pnpm@11.5.2"
 }
