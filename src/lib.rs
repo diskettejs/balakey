@@ -1,10 +1,8 @@
 #[macro_use]
 extern crate napi_derive;
 
+mod file_set;
 mod glob;
 mod shared;
-mod tasks;
-mod walker;
 
-pub use crate::tasks::*;
-pub use crate::walker::*;
+pub use crate::file_set::*;

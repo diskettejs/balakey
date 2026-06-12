@@ -130,3 +130,5 @@ Cargo.lock
 
 .DS_Store
 .vscode
+
+playground.ts
