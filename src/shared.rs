@@ -1,5 +1,5 @@
 #[napi(object)]
-pub struct HashResult {
+pub struct HashSuccess {
   // The absolute path of the file
   pub path: String,
   // The lowercase hexadecimal encoded string

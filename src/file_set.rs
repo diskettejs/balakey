@@ -41,7 +41,7 @@ impl FileSet {
 pub struct HashStream {
   // `next()` must return a `'static + Send` future, so it can't borrow the
   // receiver from `&mut self` — it takes a clone of the Arc instead.
-  rx: Arc<Mutex<mpsc::UnboundedReceiver<Either<HashResult, HashError>>>>,
+  rx: Arc<Mutex<mpsc::UnboundedReceiver<Either<HashSuccess, HashError>>>>,
 }
 
 impl HashStream {
@@ -66,7 +66,7 @@ impl HashStream {
 
 #[napi]
 impl AsyncGenerator for HashStream {
-  type Yield = Either<HashResult, HashError>;
+  type Yield = Either<HashSuccess, HashError>;
   type Next = ();
   type Return = ();
 
@@ -83,7 +83,7 @@ impl AsyncGenerator for HashStream {
 // I/O failures are yielded as `HashError` entries rather than rejecting the
 // iterator — files can disappear between glob expansion and hashing, and a
 // single bad file must not abort the rest of the stream.
-fn hash_file(path: String) -> Either<HashResult, HashError> {
+fn hash_file(path: String) -> Either<HashSuccess, HashError> {
   let mut hasher = Hasher::new();
   let start = Instant::now();
 
@@ -96,7 +96,7 @@ fn hash_file(path: String) -> Either<HashResult, HashError> {
 
   let hash = hasher.finalize();
 
-  Either::A(HashResult {
+  Either::A(HashSuccess {
     path,
     hash: hash.to_hex().to_string(),
     duration: start.elapsed().as_secs_f64(),

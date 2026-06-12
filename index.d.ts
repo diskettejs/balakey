@@ -13,7 +13,7 @@ export declare class FileSet {
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols#the_async_iterator_and_async_iterable_protocols
  */
 export declare class HashStream {
-  [Symbol.asyncIterator](): AsyncGenerator<HashResult | HashError, void, undefined>
+  [Symbol.asyncIterator](): AsyncGenerator<HashSuccess | HashError, void, undefined>
 }
 
 export interface HashError {
@@ -21,7 +21,7 @@ export interface HashError {
   error: string
 }
 
-export interface HashResult {
+export interface HashSuccess {
   path: string
   hash: string
   duration: number
