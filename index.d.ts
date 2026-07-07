@@ -3,7 +3,7 @@
 export declare class FileSet {
   constructor(patterns: Array<string>)
   get paths(): Array<string>
-  hash(): HashStream
+  hash(options?: HashOptions | undefined | null): HashStream
 }
 
 /**
@@ -35,5 +35,27 @@ export interface Hashed {
   duration: number
 }
 
+export interface HashOptions {
+  onStart?: StartCallback
+  onProgress?: ProgressCallback
+}
+
 export type Progress =
   Hashed | Failed
+
+export type ProgressCallback =
+  ((arg: ProgressEvent) => void)
+
+export interface ProgressEvent {
+  path: string
+  bytes: number
+  size: number
+}
+
+export type StartCallback =
+  ((arg: StartEvent) => void)
+
+export interface StartEvent {
+  path: string
+  size: number
+}

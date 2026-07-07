@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
-import { FileSet, type Progress } from '../index.js'
+import { FileSet, type Progress, type ProgressEvent, type StartEvent } from '../index.js'
 
 const fixturesDir = fileURLToPath(import.meta.resolve('./fixtures'))
 
@@ -95,6 +95,90 @@ test('FileSet.hash() reports cumulative progress per entry', async () => {
     const last = results.at(-1)!
     expect(last.succeeded).toBe(4)
     expect(last.failed).toBe(1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('hash({ onStart, onProgress }) emits sub-file events per file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'balakey-'))
+  try {
+    const contents: Record<string, string> = {
+      'a.bin': 'a'.repeat(1000),
+      'b.bin': 'b'.repeat(2000),
+    }
+    for (const [name, content] of Object.entries(contents)) {
+      await writeFile(join(dir, name), content)
+    }
+
+    const files = new FileSet([`${dir}/*.bin`])
+
+    const starts: StartEvent[] = []
+    const progresses: ProgressEvent[] = []
+
+    const results = await Array.fromAsync(
+      files.hash({
+        onStart: (e) => starts.push(e),
+        onProgress: (e) => progresses.push(e),
+      }),
+    )
+
+    expect(results).toHaveLength(2)
+
+    for (const [name, content] of Object.entries(contents)) {
+      const path = join(dir, name)
+
+      const start = starts.find((s) => s.path === path)
+      expect(start?.size).toBe(content.length)
+
+      const events = progresses.filter((p) => p.path === path)
+      expect(events.length).toBeGreaterThan(0)
+
+      let prev = 0
+      for (const e of events) {
+        expect(e.size).toBe(content.length)
+        expect(e.bytes).toBeGreaterThanOrEqual(prev)
+        expect(e.bytes).toBeLessThanOrEqual(e.size)
+        prev = e.bytes
+      }
+      // the final progress event for a file accounts for every byte
+      expect(events.at(-1)!.bytes).toBe(content.length)
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('hash({ onStart }) works without onProgress and still hashes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'balakey-'))
+  try {
+    await writeFile(join(dir, 'only.bin'), 'x'.repeat(500))
+    const files = new FileSet([`${dir}/*.bin`])
+
+    const starts: StartEvent[] = []
+    const results = await Array.fromAsync(files.hash({ onStart: (e) => starts.push(e) }))
+
+    expect(results).toHaveLength(1)
+    expect(results[0]?.hashed).toBe(true)
+    expect(starts).toMatchObject([{ path: join(dir, 'only.bin'), size: 500 }])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('chunked hashing (onProgress) produces the same digest as the fast path', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'balakey-'))
+  try {
+    await writeFile(join(dir, 'data.bin'), 'hello world'.repeat(100_000))
+    const files = new FileSet([`${dir}/*.bin`])
+
+    const [fast] = await Array.fromAsync(files.hash())
+    const [chunked] = await Array.fromAsync(files.hash({ onProgress: () => {} }))
+
+    if (!fast?.hashed || !chunked?.hashed) {
+      throw new Error('expected both files to hash successfully')
+    }
+    expect(chunked.hash).toBe(fast.hash)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -1,13 +1,18 @@
 use crate::glob;
 use blake3::Hasher;
+use memmap2::Mmap;
+use napi::Status;
 use napi::bindgen_prelude::*;
-use napi::tokio::sync::Mutex;
-use napi::tokio::sync::mpsc;
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::tokio::sync::{Mutex, mpsc};
 use rayon::prelude::*;
+use std::fs::File;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
+
+const CHUNK_SIZE: usize = 128 * 1024 * 1024;
 
 #[napi(object)]
 pub struct Hashed {
@@ -46,6 +51,30 @@ pub struct Failed {
 #[napi]
 pub type Progress = Either<Hashed, Failed>;
 
+#[napi(object)]
+pub struct StartEvent {
+  pub path: String,
+  pub size: f64,
+}
+
+#[napi(object)]
+pub struct ProgressEvent {
+  pub path: String,
+  pub bytes: f64,
+  pub size: f64,
+}
+
+#[napi]
+pub type StartCallback = ThreadsafeFunction<StartEvent, (), StartEvent, Status, false>;
+#[napi]
+pub type ProgressCallback = ThreadsafeFunction<ProgressEvent, (), ProgressEvent, Status, false>;
+
+#[napi(object, object_to_js = false)]
+pub struct HashOptions {
+  pub on_start: Option<StartCallback>,
+  pub on_progress: Option<ProgressCallback>,
+}
+
 enum Outcome {
   Hashed {
     path: String,
@@ -78,8 +107,8 @@ impl FileSet {
   }
 
   #[napi]
-  pub fn hash(&self) -> HashStream {
-    HashStream::start(self.paths.clone())
+  pub fn hash(&self, options: Option<HashOptions>) -> HashStream {
+    HashStream::start(self.paths.clone(), options)
   }
 }
 
@@ -96,14 +125,18 @@ pub struct HashStream {
 }
 
 impl HashStream {
-  fn start(paths: Vec<String>) -> Self {
+  fn start(paths: Vec<String>, options: Option<HashOptions>) -> Self {
     let total = paths.len() as u32;
     let (tx, rx) = mpsc::unbounded_channel();
 
     rayon::spawn(move || {
-      let _ = paths
-        .into_par_iter()
-        .try_for_each_with(tx, |tx, path| tx.send(hash_file(path)).map_err(|_| ()));
+      let on_start = options.as_ref().and_then(|o| o.on_start.as_ref());
+      let on_progress = options.as_ref().and_then(|o| o.on_progress.as_ref());
+
+      let _ = paths.into_par_iter().try_for_each_with(tx, |tx, path| {
+        tx.send(hash_file(path, on_start, on_progress))
+          .map_err(|_| ())
+      });
     });
 
     HashStream {
@@ -177,22 +210,102 @@ impl AsyncGenerator for HashStream {
   }
 }
 
-fn hash_file(path: String) -> Outcome {
-  let mut hasher = Hasher::new();
+fn hash_file(
+  path: String,
+  on_start: Option<&StartCallback>,
+  on_progress: Option<&ProgressCallback>,
+) -> Outcome {
   let start = Instant::now();
+  let mut hasher = Hasher::new();
 
-  if let Err(e) = hasher.update_mmap_rayon(&path) {
-    return Outcome::Failed {
+  // Fast path: nothing needs the file size, so hash it in one shot.
+  if on_start.is_none() && on_progress.is_none() {
+    if let Err(e) = hasher.update_mmap_rayon(&path) {
+      return Outcome::Failed {
+        path,
+        error: e.to_string(),
+      };
+    }
+    return Outcome::Hashed {
       path,
-      error: e.to_string(),
+      hash: hasher.finalize().to_hex().to_string(),
+      duration: start.elapsed().as_secs_f64(),
     };
   }
 
-  let hash = hasher.finalize();
+  let file = match File::open(&path) {
+    Ok(file) => file,
+    Err(e) => {
+      return Outcome::Failed {
+        path,
+        error: e.to_string(),
+      };
+    }
+  };
 
-  Outcome::Hashed {
-    path,
-    hash: hash.to_hex().to_string(),
-    duration: start.elapsed().as_secs_f64(),
+  let size = match file.metadata() {
+    Ok(metadata) => metadata.len(),
+    Err(e) => {
+      return Outcome::Failed {
+        path,
+        error: e.to_string(),
+      };
+    }
+  };
+
+  if let Some(on_start) = on_start {
+    on_start.call(
+      StartEvent {
+        path: path.clone(),
+        size: size as f64,
+      },
+      ThreadsafeFunctionCallMode::NonBlocking,
+    );
   }
+
+  let result = match on_progress {
+    Some(on_progress) => hash_chunked(&mut hasher, &file, &path, size, on_progress),
+    None => hasher.update_mmap_rayon(&path).map(|_| ()),
+  };
+
+  match result {
+    Ok(()) => Outcome::Hashed {
+      path,
+      hash: hasher.finalize().to_hex().to_string(),
+      duration: start.elapsed().as_secs_f64(),
+    },
+    Err(e) => Outcome::Failed {
+      path,
+      error: e.to_string(),
+    },
+  }
+}
+
+fn hash_chunked(
+  hasher: &mut Hasher,
+  file: &File,
+  path: &str,
+  size: u64,
+  on_progress: &ProgressCallback,
+) -> std::io::Result<()> {
+  let mmap = unsafe { Mmap::map(file)? };
+
+  let len = mmap.len();
+  let mut offset = 0;
+  while offset < len {
+    let end = (offset + CHUNK_SIZE).min(len);
+    hasher.update_rayon(&mmap[offset..end]);
+    offset = end;
+
+    on_progress.call(
+      ProgressEvent {
+        path: path.to_string(),
+        bytes: offset as f64,
+        size: size as f64,
+      },
+      ThreadsafeFunctionCallMode::NonBlocking,
+    );
+  }
+
+  Ok(())
 }
