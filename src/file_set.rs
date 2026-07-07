@@ -8,6 +8,7 @@ use napi::tokio::sync::{Mutex, mpsc};
 use rayon::prelude::*;
 use std::fs::File;
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
@@ -87,18 +88,49 @@ enum Outcome {
   },
 }
 
+#[napi(object, object_to_js = false)]
+pub struct FileSetOptions {
+  pub ignore: Option<Vec<String>>,
+}
+
 #[napi]
 pub struct FileSet {
+  root: String,
   paths: Vec<String>,
 }
 
 #[napi]
 impl FileSet {
   #[napi(constructor)]
-  pub fn new(patterns: Vec<String>) -> Self {
-    FileSet {
-      paths: glob::expand(patterns),
-    }
+  pub fn new(root: String, paths: Vec<String>) -> Self {
+    FileSet { root, paths }
+  }
+
+  #[napi(factory)]
+  pub async fn from(
+    root: String,
+    pattern: Either<String, Vec<String>>,
+    options: Option<FileSetOptions>,
+  ) -> Result<Self> {
+    let patterns = match pattern {
+      Either::A(single) => vec![single],
+      Either::B(many) => many,
+    };
+    let ignore = options.and_then(|o| o.ignore).unwrap_or_default();
+    let root_dir = root.clone();
+    let paths = spawn_blocking(move || glob::walk(Path::new(&root), &patterns, &ignore))
+      .await
+      .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))??;
+
+    Ok(FileSet {
+      root: root_dir,
+      paths,
+    })
+  }
+
+  #[napi(getter)]
+  pub fn root(&self) -> String {
+    self.root.clone()
   }
 
   #[napi(getter)]
