@@ -219,6 +219,7 @@ jobs:
               console.log('IMAGE=node:${{ matrix.node }}-slim')
             }
           " >> $GITHUB_OUTPUT
+          echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
       - name: Install dependencies
         run: |
           echo 'supportedArchitectures.cpu=["current", "arm64", "x64", "arm"]' >> .npmrc
