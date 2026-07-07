@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
-import { FileSet, type HashError, type HashResult } from '../index.js'
+import { FileSet, type HashError, type HashSuccess } from '../index.js'
 
-const isOk = (entry: HashResult | HashError): entry is HashResult => !('error' in entry)
+const isOk = (entry: HashSuccess | HashError): entry is HashSuccess => !('error' in entry)
 
 const fixturesDir = fileURLToPath(import.meta.resolve('./fixtures'))
 
