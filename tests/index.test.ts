@@ -138,10 +138,10 @@ test('FileSet.hash() reports cumulative progress per entry', async () => {
     expect(results).toHaveLength(total)
 
     results.forEach((entry, i) => {
-      expect(entry.total).toBe(total)
+      expect(entry.stats.total).toBe(total)
       // counts are stamped at the yield boundary, so each entry's tally equals
       // its 1-based position in the stream
-      expect(entry.succeeded + entry.failed).toBe(i + 1)
+      expect(entry.stats.hashed + entry.stats.failed).toBe(i + 1)
 
       if (entry.hashed) {
         expect(typeof entry.hash).toBe('string')
@@ -152,8 +152,8 @@ test('FileSet.hash() reports cumulative progress per entry', async () => {
     })
 
     const last = results.at(-1)!
-    expect(last.succeeded).toBe(4)
-    expect(last.failed).toBe(1)
+    expect(last.stats.hashed).toBe(4)
+    expect(last.stats.failed).toBe(1)
   })
 })
 

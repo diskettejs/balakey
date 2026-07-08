@@ -15,21 +15,27 @@ use std::time::Instant;
 const CHUNK_SIZE: usize = 128 * 1024 * 1024;
 
 #[napi(object)]
+pub struct SetStats {
+  // Number of files hashed so far, including this one
+  pub hashed: u32,
+  // Number of files that failed so far
+  pub failed: u32,
+  // Total number of files in the set
+  pub total: u32,
+}
+
+#[napi(object)]
 pub struct Hashed {
   #[napi(ts_type = "true")]
   pub hashed: bool,
   // The absolute path of the file
   pub path: String,
-  // Total number of files in the set
-  pub total: u32,
-  // Number of files hashed so far, including this one
-  pub succeeded: u32,
-  // Number of files that failed so far
-  pub failed: u32,
   // The lowercase hexadecimal encoded string
   pub hash: String,
   // The amount of time it took to hash the file in seconds, includes the fractional (nanosecond).
   pub duration: f64,
+  // Progress across the whole file set
+  pub stats: SetStats,
 }
 
 #[napi(object)]
@@ -38,14 +44,10 @@ pub struct Failed {
   pub hashed: bool,
   // The absolute path of the file that could not be hashed
   pub path: String,
-  // Total number of files in the set
-  pub total: u32,
-  // Number of files hashed so far
-  pub succeeded: u32,
-  // Number of files that failed so far, including this one
-  pub failed: u32,
   // The underlying I/O error message
   pub error: String,
+  // Progress across the whole file set
+  pub stats: SetStats,
 }
 
 #[napi]
@@ -212,7 +214,11 @@ impl AsyncGenerator for HashStream {
       let (succeeded, failed) = (inner.succeeded, inner.failed);
       drop(inner);
 
-      let total = state.total;
+      let stats = SetStats {
+        hashed: succeeded,
+        failed,
+        total: state.total,
+      };
       let progress = match outcome {
         Outcome::Hashed {
           path,
@@ -221,19 +227,15 @@ impl AsyncGenerator for HashStream {
         } => Either::A(Hashed {
           hashed: true,
           path,
-          total,
-          succeeded,
-          failed,
           hash,
           duration,
+          stats,
         }),
         Outcome::Failed { path, error } => Either::B(Failed {
           hashed: false,
           path,
-          total,
-          succeeded,
-          failed,
           error,
+          stats,
         }),
       };
 

@@ -21,10 +21,8 @@ export declare class HashStream {
 export interface Failed {
   hashed: false
   path: string
-  total: number
-  succeeded: number
-  failed: number
   error: string
+  stats: SetStats
 }
 
 export interface FileSetOptions {
@@ -34,11 +32,9 @@ export interface FileSetOptions {
 export interface Hashed {
   hashed: true
   path: string
-  total: number
-  succeeded: number
-  failed: number
   hash: string
   duration: number
+  stats: SetStats
 }
 
 export interface HashOptions {
@@ -56,6 +52,12 @@ export interface ProgressEvent {
   path: string
   bytes: number
   size: number
+}
+
+export interface SetStats {
+  hashed: number
+  failed: number
+  total: number
 }
 
 export type StartCallback =
