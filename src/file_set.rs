@@ -234,6 +234,19 @@ impl AsyncGenerator for HashStream {
       Ok(Some(progress))
     }
   }
+
+  fn complete(
+    &mut self,
+    _value: Option<Self::Return>,
+  ) -> impl std::future::Future<Output = Result<Option<Self::Yield>>> + Send + 'static {
+    let state = self.state.clone();
+
+    async move {
+      let mut inner = state.inner.lock().await;
+      inner.rx.close();
+      Ok(None)
+    }
+  }
 }
 
 fn hash_file(
