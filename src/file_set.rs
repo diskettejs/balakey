@@ -10,7 +10,6 @@ use std::fs::File;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 const CHUNK_SIZE: usize = 128 * 1024 * 1024;
@@ -145,10 +144,14 @@ impl FileSet {
 }
 
 struct State {
-  rx: Mutex<mpsc::UnboundedReceiver<Outcome>>,
+  inner: Mutex<Inner>,
   total: u32,
-  succeeded: AtomicU32,
-  failed: AtomicU32,
+}
+
+struct Inner {
+  rx: mpsc::UnboundedReceiver<Outcome>,
+  succeeded: u32,
+  failed: u32,
 }
 
 #[napi(async_iterator)]
@@ -173,10 +176,12 @@ impl HashStream {
 
     HashStream {
       state: Arc::new(State {
-        rx: Mutex::new(rx),
+        inner: Mutex::new(Inner {
+          rx,
+          succeeded: 0,
+          failed: 0,
+        }),
         total,
-        succeeded: AtomicU32::new(0),
-        failed: AtomicU32::new(0),
       }),
     }
   }
@@ -195,22 +200,17 @@ impl AsyncGenerator for HashStream {
     let state = self.state.clone();
 
     async move {
-      let mut rx = state.rx.lock().await;
-      let Some(outcome) = rx.recv().await else {
+      let mut inner = state.inner.lock().await;
+      let Some(outcome) = inner.rx.recv().await else {
         return Ok(None);
       };
 
-      let (succeeded, failed) = match &outcome {
-        Outcome::Hashed { .. } => {
-          let succeeded = state.succeeded.fetch_add(1, Ordering::Relaxed) + 1;
-          (succeeded, state.failed.load(Ordering::Relaxed))
-        }
-        Outcome::Failed { .. } => {
-          let failed = state.failed.fetch_add(1, Ordering::Relaxed) + 1;
-          (state.succeeded.load(Ordering::Relaxed), failed)
-        }
-      };
-      drop(rx);
+      match &outcome {
+        Outcome::Hashed { .. } => inner.succeeded += 1,
+        Outcome::Failed { .. } => inner.failed += 1,
+      }
+      let (succeeded, failed) = (inner.succeeded, inner.failed);
+      drop(inner);
 
       let total = state.total;
       let progress = match outcome {
