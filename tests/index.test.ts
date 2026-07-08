@@ -1,285 +1,244 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { expect, test } from 'vitest'
+import { describe, expect } from 'vitest'
 import { FileSet, type Progress, type ProgressEvent, type StartEvent } from '../index.js'
+import { capture, test } from './support.ts'
 
 const fixturesDir = fileURLToPath(import.meta.resolve('./fixtures'))
 
-async function withTempDir(fn: (dir: string) => Promise<void>) {
-  const dir = await mkdtemp(join(tmpdir(), 'balakey-'))
-  try {
-    await fn(dir)
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-}
+describe('FileSet', () => {
+  describe('from()', () => {
+    test('expands a glob into a path snapshot', async () => {
+      const fileSet = await FileSet.from(fixturesDir, '**/*')
 
-test('FileSet.from returns the expanded glob snapshot', async () => {
-  const fileSet = await FileSet.from(fixturesDir, '**/*')
+      expect(fileSet.paths.length).toBeGreaterThan(0)
 
-  expect(fileSet.paths.length).toBeGreaterThan(0)
+      const results = await Array.fromAsync(fileSet.hash())
+      expect(results.map((r) => r.path)).toEqualPaths(fileSet.paths)
+    })
 
-  const results = await Array.fromAsync(fileSet.hash())
-  expect(results.map((r) => r.path).toSorted()).toEqual(fileSet.paths.toSorted())
-})
+    test('expands brace alternation in a single pattern', async ({ dir, write, at }) => {
+      await write({ 'a.mp4': 'x', 'b.mkv': 'y', 'c.txt': 'z' })
 
-test('FileSet.hash() can run multiple times', async () => {
-  const fileSet = await FileSet.from(fixturesDir, '**/*')
+      const fileSet = await FileSet.from(dir, '*.{mp4,mkv}')
+      expect(fileSet.paths).toEqualPaths(at('a.mp4', 'b.mkv'))
+    })
 
-  const [first, second] = await Promise.all([
-    Array.fromAsync(fileSet.hash()),
-    Array.fromAsync(fileSet.hash()),
-  ])
-  expect(first.length).toBe(second.length)
-})
+    test('unions and dedupes multiple patterns', async ({ dir, write, at }) => {
+      await write({ 'a.mp4': 'x', 'b.mkv': 'y' })
 
-test('FileSet.from expands brace alternation in a single pattern', async () => {
-  await withTempDir(async (dir) => {
-    await writeFile(join(dir, 'a.mp4'), 'x')
-    await writeFile(join(dir, 'b.mkv'), 'y')
-    await writeFile(join(dir, 'c.txt'), 'z')
+      // a.mp4 matches both '*.mp4' and '**/*.mp4' but should appear once
+      const fileSet = await FileSet.from(dir, ['*.mp4', '*.mkv', '**/*.mp4'])
+      expect(fileSet.paths).toEqualPaths(at('a.mp4', 'b.mkv'))
+    })
 
-    const fileSet = await FileSet.from(dir, '*.{mp4,mkv}')
-    expect(fileSet.paths.toSorted()).toEqual([join(dir, 'a.mp4'), join(dir, 'b.mkv')].toSorted())
+    test('excludes matching subtrees via ignore', async ({ dir, write, at }) => {
+      await write({ 'keep/a.txt': 'a', 'skip/b.txt': 'b' })
+
+      const fileSet = await FileSet.from(dir, '**/*.txt', { ignore: ['skip/**'] })
+      expect(fileSet.paths).toEqualPaths(at('keep/a.txt'))
+    })
+
+    test('excludes directories from results', async ({ dir, write, at }) => {
+      await write({ 'nested/file.txt': 'x' })
+
+      const fileSet = await FileSet.from(dir, '**/*')
+      expect(fileSet.paths).toEqualPaths(at('nested/file.txt'))
+    })
+
+    test('rejects when the root is not a directory', async () => {
+      await expect(FileSet.from(join(tmpdir(), 'balakey-does-not-exist'), '**/*')).rejects.toThrow()
+    })
+
+    test('rejects an invalid glob pattern', async ({ dir }) => {
+      await expect(FileSet.from(dir, '***')).rejects.toThrow()
+    })
   })
-})
 
-test('FileSet.from unions and dedupes multiple patterns', async () => {
-  await withTempDir(async (dir) => {
-    await writeFile(join(dir, 'a.mp4'), 'x')
-    await writeFile(join(dir, 'b.mkv'), 'y')
+  describe('hash()', () => {
+    test('can run multiple times', async () => {
+      const fileSet = await FileSet.from(fixturesDir, '**/*')
 
-    // a.mp4 matches both '*.mp4' and '**/*.mp4' but should appear once
-    const fileSet = await FileSet.from(dir, ['*.mp4', '*.mkv', '**/*.mp4'])
-    expect(fileSet.paths.toSorted()).toEqual([join(dir, 'a.mp4'), join(dir, 'b.mkv')].toSorted())
-  })
-})
+      const [first, second] = await Promise.all([
+        Array.fromAsync(fileSet.hash()),
+        Array.fromAsync(fileSet.hash()),
+      ])
+      expect(first.length).toBe(second.length)
+    })
 
-test('FileSet.from excludes matching subtrees via ignore', async () => {
-  await withTempDir(async (dir) => {
-    await mkdir(join(dir, 'keep'))
-    await mkdir(join(dir, 'skip'))
-    await writeFile(join(dir, 'keep', 'a.txt'), 'a')
-    await writeFile(join(dir, 'skip', 'b.txt'), 'b')
+    test('yields a failed entry without aborting the stream', async ({ dir, write }) => {
+      await write({ 'kept.bin': 'kept', 'gone.bin': 'gone' })
 
-    const fileSet = await FileSet.from(dir, '**/*.txt', { ignore: ['skip/**'] })
-    expect(fileSet.paths).toEqual([join(dir, 'keep', 'a.txt')])
-  })
-})
+      const fileSet = await FileSet.from(dir, '*.bin')
+      expect(fileSet.paths).toHaveLength(2)
 
-test('FileSet.from excludes directories from results', async () => {
-  await withTempDir(async (dir) => {
-    await mkdir(join(dir, 'nested'))
-    await writeFile(join(dir, 'nested', 'file.txt'), 'x')
+      // paths are snapshotted at expansion, so deleting a file now forces
+      // an I/O failure during hash()
+      await rm(join(dir, 'gone.bin'))
 
-    const fileSet = await FileSet.from(dir, '**/*')
-    expect(fileSet.paths).toEqual([join(dir, 'nested', 'file.txt')])
-  })
-})
+      const results = await Array.fromAsync(fileSet.hash())
+      expect(results).toHaveLength(2)
 
-test('FileSet.from rejects when root is not a directory', async () => {
-  await expect(FileSet.from(join(tmpdir(), 'balakey-does-not-exist'), '**/*')).rejects.toThrow()
-})
+      const ok = results.filter((r) => r.hashed)
+      const failed = results.filter((r) => !r.hashed)
+      expect(ok).toMatchObject([{ path: join(dir, 'kept.bin'), hashed: true }])
+      expect(failed).toMatchObject([
+        { path: join(dir, 'gone.bin'), hashed: false, error: expect.any(String) },
+      ])
+    })
 
-test('FileSet.from rejects an invalid glob pattern', async () => {
-  await withTempDir(async (dir) => {
-    await expect(FileSet.from(dir, '***')).rejects.toThrow()
-  })
-})
+    test('supports early termination', async () => {
+      const fileSet = await FileSet.from(fixturesDir, '**/*')
 
-test('FileSet.hash() yields a failed entry for unreadable fileSet without aborting', async () => {
-  await withTempDir(async (dir) => {
-    await writeFile(join(dir, 'kept.bin'), 'kept')
-    await writeFile(join(dir, 'gone.bin'), 'gone')
-
-    const fileSet = await FileSet.from(dir, '*.bin')
-    expect(fileSet.paths).toHaveLength(2)
-
-    // paths are snapshotted at expansion, so deleting a file now forces
-    // an I/O failure during hash()
-    await rm(join(dir, 'gone.bin'))
-
-    const results = await Array.fromAsync(fileSet.hash())
-    expect(results).toHaveLength(2)
-
-    const ok = results.filter((r) => r.hashed)
-    const failed = results.filter((r) => !r.hashed)
-    expect(ok).toMatchObject([{ path: join(dir, 'kept.bin'), hashed: true }])
-    expect(failed).toMatchObject([
-      { path: join(dir, 'gone.bin'), hashed: false, error: expect.any(String) },
-    ])
-  })
-})
-
-test('FileSet.hash() supports early termination', async () => {
-  const fileSet = await FileSet.from(fixturesDir, '**/*')
-
-  for await (const result of fileSet.hash()) {
-    expect(result.path).toEqual(expect.any(String))
-    break
-  }
-})
-
-test('FileSet.hash() reports cumulative progress per entry', async () => {
-  await withTempDir(async (dir) => {
-    for (const name of ['a', 'b', 'c', 'd', 'gone']) {
-      await writeFile(join(dir, `${name}.bin`), name)
-    }
-
-    const fileSet = await FileSet.from(dir, '*.bin')
-    const total = fileSet.paths.length
-    expect(total).toBe(5)
-
-    await rm(join(dir, 'gone.bin'))
-
-    const results: Progress[] = await Array.fromAsync(fileSet.hash())
-    expect(results).toHaveLength(total)
-
-    results.forEach((entry, i) => {
-      expect(entry.stats.total).toBe(total)
-      // counts are stamped at the yield boundary, so each entry's tally equals
-      // its 1-based position in the stream
-      expect(entry.stats.hashed + entry.stats.failed).toBe(i + 1)
-
-      if (entry.hashed) {
-        expect(typeof entry.hash).toBe('string')
-        expect(typeof entry.duration).toBe('number')
-      } else {
-        expect(typeof entry.error).toBe('string')
+      for await (const result of fileSet.hash()) {
+        expect(result.path).toEqual(expect.any(String))
+        break
       }
     })
 
-    const last = results.at(-1)!
-    expect(last.stats.hashed).toBe(4)
-    expect(last.stats.failed).toBe(1)
-  })
-})
+    test('reports cumulative progress per entry', async ({ dir, write }) => {
+      await write({ 'a.bin': 'a', 'b.bin': 'b', 'c.bin': 'c', 'd.bin': 'd', 'gone.bin': 'gone' })
 
-test('FileSet.hash() with callbacks hashes an empty file without errors', async () => {
-  await withTempDir(async (dir) => {
-    await writeFile(join(dir, 'empty.bin'), '')
+      const fileSet = await FileSet.from(dir, '*.bin')
+      const total = fileSet.paths.length
+      expect(total).toBe(5)
 
-    const fileSet = await FileSet.from(dir, '*.bin')
-    expect(fileSet.paths).toEqual([join(dir, 'empty.bin')])
+      await rm(join(dir, 'gone.bin'))
 
-    const entries: Progress[] = []
+      const results: Progress[] = await Array.fromAsync(fileSet.hash())
+      expect(results).toHaveLength(total)
 
-    for await (const entry of fileSet.hash({ onProgress() {} })) {
-      entries.push(entry)
-    }
+      results.forEach((entry, i) => {
+        expect(entry.stats.total).toBe(total)
+        // counts are stamped at the yield boundary, so each entry's tally equals
+        // its 1-based position in the stream
+        expect(entry.stats.hashed + entry.stats.failed).toBe(i + 1)
 
-    expect(entries).toHaveLength(1)
+        if (entry.hashed) {
+          expect(typeof entry.hash).toBe('string')
+          expect(typeof entry.duration).toBe('number')
+        } else {
+          expect(typeof entry.error).toBe('string')
+        }
+      })
 
-    const [entry] = entries
-    expect(entry).toMatchObject({
-      path: join(dir, 'empty.bin'),
-      hashed: true,
-      // BLAKE3 digest of the empty input
-      hash: 'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262',
+      const last = results.at(-1)!
+      expect(last.stats.hashed).toBe(4)
+      expect(last.stats.failed).toBe(1)
     })
-    expect(entry?.stats).toMatchObject({ hashed: 1, failed: 0, total: 1 })
-  })
-})
 
-test('FileSet.hash() hashes an empty file without errors', async () => {
-  await withTempDir(async (dir) => {
-    await writeFile(join(dir, 'empty.bin'), '')
+    test('hashes an empty file', async ({ dir, write, at }) => {
+      await write({ 'empty.bin': '' })
 
-    const fileSet = await FileSet.from(dir, '*.bin')
-    expect(fileSet.paths).toEqual([join(dir, 'empty.bin')])
+      const fileSet = await FileSet.from(dir, '*.bin')
+      expect(fileSet.paths).toEqualPaths(at('empty.bin'))
 
-    const entries: Progress[] = []
+      const entries: Progress[] = []
 
-    for await (const entry of fileSet.hash()) {
-      entries.push(entry)
-    }
-
-    expect(entries).toHaveLength(1)
-
-    const [entry] = entries
-    expect(entry).toMatchObject({
-      path: join(dir, 'empty.bin'),
-      hashed: true,
-      // BLAKE3 digest of the empty input
-      hash: 'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262',
-    })
-    expect(entry?.stats).toMatchObject({ hashed: 1, failed: 0, total: 1 })
-  })
-})
-
-test('hash({ onStart, onProgress }) emits sub-file events per file', async () => {
-  await withTempDir(async (dir) => {
-    const contents: Record<string, string> = {
-      'a.bin': 'a'.repeat(1000),
-      'b.bin': 'b'.repeat(2000),
-    }
-    for (const [name, content] of Object.entries(contents)) {
-      await writeFile(join(dir, name), content)
-    }
-
-    const fileSet = await FileSet.from(dir, '*.bin')
-
-    const starts: StartEvent[] = []
-    const progresses: ProgressEvent[] = []
-
-    const results = await Array.fromAsync(
-      fileSet.hash({
-        onStart: (e) => starts.push(e),
-        onProgress: (e) => progresses.push(e),
-      }),
-    )
-
-    expect(results).toHaveLength(2)
-
-    for (const [name, content] of Object.entries(contents)) {
-      const path = join(dir, name)
-
-      const start = starts.find((s) => s.path === path)
-      expect(start?.size).toBe(content.length)
-
-      const events = progresses.filter((p) => p.path === path)
-      expect(events.length).toBeGreaterThan(0)
-
-      let prev = 0
-      for (const e of events) {
-        expect(e.size).toBe(content.length)
-        expect(e.bytes).toBeGreaterThanOrEqual(prev)
-        expect(e.bytes).toBeLessThanOrEqual(e.size)
-        prev = e.bytes
+      for await (const entry of fileSet.hash()) {
+        entries.push(entry)
       }
-      // the final progress event for a file accounts for every byte
-      expect(events.at(-1)!.bytes).toBe(content.length)
-    }
-  })
-})
 
-test('hash({ onStart }) works without onProgress and still hashes', async () => {
-  await withTempDir(async (dir) => {
-    await writeFile(join(dir, 'only.bin'), 'x'.repeat(500))
-    const fileSet = await FileSet.from(dir, '*.bin')
+      expect(entries).toHaveLength(1)
 
-    const starts: StartEvent[] = []
-    const results = await Array.fromAsync(fileSet.hash({ onStart: (e) => starts.push(e) }))
+      const [entry] = entries
+      expect(entry).toMatchObject({
+        path: join(dir, 'empty.bin'),
+        hashed: true,
+        // BLAKE3 digest of the empty input
+        hash: 'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262',
+      })
+      expect(entry?.stats).toMatchObject({ hashed: 1, failed: 0, total: 1 })
+    })
 
-    expect(results).toHaveLength(1)
-    expect(results[0]?.hashed).toBe(true)
-    expect(starts).toMatchObject([{ path: join(dir, 'only.bin'), size: 500 }])
-  })
-})
+    test('hashes an empty file with onProgress', async ({ dir, write, at }) => {
+      await write({ 'empty.bin': '' })
 
-test('chunked hashing (onProgress) produces the same digest as the fast path', async () => {
-  await withTempDir(async (dir) => {
-    await writeFile(join(dir, 'data.bin'), 'hello world'.repeat(100_000))
-    const fileSet = await FileSet.from(dir, '*.bin')
+      const fileSet = await FileSet.from(dir, '*.bin')
+      expect(fileSet.paths).toEqualPaths(at('empty.bin'))
 
-    const [fast] = await Array.fromAsync(fileSet.hash())
-    const [chunked] = await Array.fromAsync(fileSet.hash({ onProgress: () => {} }))
+      const entries: Progress[] = []
 
-    if (!fast?.hashed || !chunked?.hashed) {
-      throw new Error('expected both fileSet to hash successfully')
-    }
-    expect(chunked.hash).toBe(fast.hash)
+      for await (const entry of fileSet.hash({ onProgress() {} })) {
+        entries.push(entry)
+      }
+
+      expect(entries).toHaveLength(1)
+
+      const [entry] = entries
+      expect(entry).toMatchObject({
+        path: join(dir, 'empty.bin'),
+        hashed: true,
+        // BLAKE3 digest of the empty input
+        hash: 'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262',
+      })
+      expect(entry?.stats).toMatchObject({ hashed: 1, failed: 0, total: 1 })
+    })
+
+    test('emits start and progress events per file', async ({ dir, write }) => {
+      const contents: Record<string, string> = {
+        'a.bin': 'a'.repeat(1000),
+        'b.bin': 'b'.repeat(2000),
+      }
+      await write(contents)
+
+      const fileSet = await FileSet.from(dir, '*.bin')
+
+      const starts = capture<StartEvent>()
+      const progresses = capture<ProgressEvent>()
+
+      const results = await Array.fromAsync(
+        fileSet.hash({ onStart: starts.push, onProgress: progresses.push }),
+      )
+
+      expect(results).toHaveLength(2)
+
+      for (const [name, content] of Object.entries(contents)) {
+        const path = join(dir, name)
+
+        const start = starts.items.find((s) => s.path === path)
+        expect(start?.size).toBe(content.length)
+
+        const events = progresses.items.filter((p) => p.path === path)
+        expect(events.length).toBeGreaterThan(0)
+
+        let prev = 0
+        for (const e of events) {
+          expect(e.size).toBe(content.length)
+          expect(e.bytes).toBeGreaterThanOrEqual(prev)
+          expect(e.bytes).toBeLessThanOrEqual(e.size)
+          prev = e.bytes
+        }
+        // the final progress event for a file accounts for every byte
+        expect(events.at(-1)!.bytes).toBe(content.length)
+      }
+    })
+
+    test('emits start events without onProgress', async ({ dir, write }) => {
+      await write({ 'only.bin': 'x'.repeat(500) })
+      const fileSet = await FileSet.from(dir, '*.bin')
+
+      const starts = capture<StartEvent>()
+      const results = await Array.fromAsync(fileSet.hash({ onStart: starts.push }))
+
+      expect(results).toHaveLength(1)
+      expect(results[0]?.hashed).toBe(true)
+      expect(starts.items).toMatchObject([{ path: join(dir, 'only.bin'), size: 500 }])
+    })
+
+    test('chunked digest matches the fast path', async ({ dir, write }) => {
+      await write({ 'data.bin': 'hello world'.repeat(100_000) })
+      const fileSet = await FileSet.from(dir, '*.bin')
+
+      const [fast] = await Array.fromAsync(fileSet.hash())
+      const [chunked] = await Array.fromAsync(fileSet.hash({ onProgress: () => {} }))
+
+      if (!fast?.hashed || !chunked?.hashed) {
+        throw new Error('expected both fileSet to hash successfully')
+      }
+      expect(chunked.hash).toBe(fast.hash)
+    })
   })
 })
