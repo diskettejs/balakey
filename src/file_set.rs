@@ -81,11 +81,6 @@ enum Outcome {
   },
 }
 
-#[napi(object, object_to_js = false)]
-pub struct FileSetOptions {
-  pub ignore: Option<Vec<String>>,
-}
-
 #[napi]
 pub struct FileSet {
   root: String,
@@ -103,17 +98,10 @@ impl FileSet {
   pub async fn from(
     root: String,
     pattern: Either<String, Vec<String>>,
-    options: Option<FileSetOptions>,
+    options: Option<glob::FileSetOptions>,
   ) -> Result<Self> {
-    let patterns = match pattern {
-      Either::A(single) => vec![single],
-      Either::B(many) => many,
-    };
-    let ignore = options.and_then(|o| o.ignore).unwrap_or_default();
     let root_dir = root.clone();
-    let paths = spawn_blocking(move || glob::walk(std::path::Path::new(&root), &patterns, &ignore))
-      .await
-      .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))??;
+    let paths = glob::expand(root, pattern, options).await?;
 
     Ok(FileSet {
       root: root_dir,
