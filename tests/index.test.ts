@@ -157,6 +157,27 @@ test('FileSet.hash() reports cumulative progress per entry', async () => {
   })
 })
 
+test('FileSet.hash() hashes an empty file without errors', async () => {
+  await withTempDir(async (dir) => {
+    await writeFile(join(dir, 'empty.bin'), '')
+
+    const files = await FileSet.from(dir, '*.bin')
+    expect(files.paths).toEqual([join(dir, 'empty.bin')])
+
+    const results = await Array.fromAsync(files.hash())
+    expect(results).toHaveLength(1)
+
+    const [entry] = results
+    expect(entry).toMatchObject({
+      path: join(dir, 'empty.bin'),
+      hashed: true,
+      // BLAKE3 digest of the empty input
+      hash: 'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262',
+    })
+    expect(entry?.stats).toMatchObject({ hashed: 1, failed: 0, total: 1 })
+  })
+})
+
 test('hash({ onStart, onProgress }) emits sub-file events per file', async () => {
   await withTempDir(async (dir) => {
     const contents: Record<string, string> = {
