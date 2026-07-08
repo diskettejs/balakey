@@ -4,7 +4,7 @@ use napi::tokio::sync::{Mutex, mpsc};
 use napi::{Status, bindgen_prelude::*, threadsafe_function::*};
 use rayon::prelude::*;
 
-const CHUNK_SIZE: usize = 128 * 1024 * 1024;
+const DEFAULT_CHUNK_SIZE: usize = 128 * 1024 * 1024;
 
 #[napi(object)]
 pub struct SetStats {
@@ -67,6 +67,8 @@ pub type ProgressCallback = ThreadsafeFunction<ProgressEvent, (), ProgressEvent,
 pub struct HashOptions {
   pub on_start: Option<StartCallback>,
   pub on_progress: Option<ProgressCallback>,
+  /// Number of bytes hashed per chunk, e.g. `67108864` (64 MiB) or `268435456` (256 MiB). Defaults to 128 MiB when unset or 0.
+  pub chunk_size: Option<u32>,
 }
 
 enum Outcome {
@@ -146,12 +148,19 @@ impl HashStream {
     let total = paths.len() as u32;
     let (tx, rx) = mpsc::unbounded_channel();
 
+    let chunk_size = options
+      .as_ref()
+      .and_then(|o| o.chunk_size)
+      .filter(|&size| size > 0)
+      .map(|size| size as usize)
+      .unwrap_or(DEFAULT_CHUNK_SIZE);
+
     rayon::spawn(move || {
       let on_start = options.as_ref().and_then(|o| o.on_start.as_ref());
       let on_progress = options.as_ref().and_then(|o| o.on_progress.as_ref());
 
       let _ = paths.into_par_iter().try_for_each_with(tx, |tx, path| {
-        tx.send(hash_file(path, on_start, on_progress))
+        tx.send(hash_file(path, on_start, on_progress, chunk_size))
           .map_err(|_| ())
       });
     });
@@ -256,6 +265,7 @@ fn hash_file(
   path: String,
   on_start: Option<&StartCallback>,
   on_progress: Option<&ProgressCallback>,
+  chunk_size: usize,
 ) -> Outcome {
   let start = std::time::Instant::now();
 
@@ -290,7 +300,7 @@ fn hash_file(
   }
 
   let mut hasher = Hasher::new();
-  match hash_mmap(&mut hasher, &file, &path, size, on_progress) {
+  match hash_mmap(&mut hasher, &file, &path, size, on_progress, chunk_size) {
     Ok(()) => Outcome::Hashed {
       path,
       hash: hasher.finalize().to_hex().to_string(),
@@ -309,14 +319,15 @@ fn hash_mmap(
   path: &str,
   size: u64,
   on_progress: Option<&ProgressCallback>,
+  chunk_size: usize,
 ) -> std::io::Result<()> {
   let mmap = unsafe { memmap2::Mmap::map(file)? };
 
   let len = mmap.len();
   let mut offset = 0;
   while offset < len {
-    let end = (offset + CHUNK_SIZE).min(len);
-    hasher.update_rayon(&mmap[offset..end]);
+    let end = (offset + chunk_size).min(len);
+    hasher.update(&mmap[offset..end]);
     offset = end;
 
     if let Some(on_progress) = on_progress {

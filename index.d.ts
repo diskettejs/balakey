@@ -40,6 +40,8 @@ export interface Hashed {
 export interface HashOptions {
   onStart?: StartCallback
   onProgress?: ProgressCallback
+  /** Number of bytes hashed per chunk, e.g. `67108864` (64 MiB) or `268435456` (256 MiB). Defaults to 128 MiB when unset or 0. */
+  chunkSize?: number
 }
 
 export type Progress =

@@ -240,5 +240,35 @@ describe('FileSet', () => {
       }
       expect(chunked.hash).toBe(fast.hash)
     })
+
+    test('chunkSize controls progress granularity', async ({ dir, write }) => {
+      await write({ 'data.bin': 'x'.repeat(10) })
+      const fileSet = await FileSet.from(dir, '*.bin')
+
+      const progresses = capture<ProgressEvent>()
+      const [result] = await Array.fromAsync(
+        fileSet.hash({ chunkSize: 4, onProgress: progresses.push }),
+      )
+
+      // 10 bytes in 4-byte chunks => progress boundaries at 4, 8, 10
+      expect(progresses.items.map((p) => p.bytes)).toEqual([4, 8, 10])
+      expect(progresses.items.every((p) => p.size === 10)).toBe(true)
+
+      // digest is independent of chunk size
+      const [whole] = await Array.fromAsync(fileSet.hash())
+      if (!result?.hashed || !whole?.hashed) throw new Error('expected both to hash')
+      expect(result.hash).toBe(whole.hash)
+    })
+
+    test('chunkSize of 0 falls back to the default', async ({ dir, write }) => {
+      await write({ 'data.bin': 'x'.repeat(10) })
+      const fileSet = await FileSet.from(dir, '*.bin')
+
+      const progresses = capture<ProgressEvent>()
+      await Array.fromAsync(fileSet.hash({ chunkSize: 0, onProgress: progresses.push }))
+
+      // the default chunk (128 MiB) spans the whole file in one event
+      expect(progresses.items.map((p) => p.bytes)).toEqual([10])
+    })
   })
 })
